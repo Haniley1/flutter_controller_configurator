@@ -11,7 +11,7 @@ class SSDPManager {
     discoverDevices() async {
       final discover = DeviceDiscoverer();
 
-      await discover.start(ipv6: false);
+      await discover.start();
       discover.quickDiscoverClients().listen((client) async {
         try {
           final device = await client.getDevice();
