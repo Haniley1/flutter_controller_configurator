@@ -8,22 +8,27 @@
 #include <DNSServer.h>
 #include <WiFiManager.h>                        // https://github.com/tzapu/WiFiManager
 #include <ESP8266SSDP.h>
-//#include <aREST.h>
+#include <Ticker.h>
+
+#define ONE_WIRE_BUS D4                       // Шина данных подключена к выводу D4 на ESP8266. Пин подключения OneWire шины, 2 (D4)
+
 ESP8266WebServer HTTP(80);                      // Web интерфейс для устройства
 WiFiServer SERVERaREST(8080);                   // aREST и сервер для него
-//aREST rest = aREST();
-#define ONE_WIRE_BUS D4                       // Шина данных подключена к выводу D4 на ESP8266. Пин подключения OneWire шины, 2 (D4)
+
 OneWire oneWire(ONE_WIRE_BUS);                  // Настройка объекта oneWire для связи с любыми устройствами OneWire
 DallasTemperature sensors(&oneWire);            // Передаем ссылку на объект oneWire объекту Dallas Temperature.
 DeviceAddress Thermometer;                      // Переменная для хранения адресов устройств
 
+Ticker tempTicker;
+Ticker tempLimitTicker;
+Ticker delayTicker;
 
+int httpCounter = 0;
 float operatingMaximum = 0;
 float operatingMinimum = 0;
 float operatingMaximumEeprom = 0;
 float operatingMinimumEeprom = 0;
-String data, params;
-float data1;
+String temperature, params;
 const char *host = "api.apinjener.ru";          // Адрес нашего веб сервера
 const int httpPort = 80;                        // Адрес порта для HTTPS= 443 или HTTP = 80
 //------------------------------------------------------------------------
@@ -42,55 +47,22 @@ void setup()
   wifiManager.autoConnect(nameAP);    //Если не удалось подключиться клиентом запускаем режим AP. Доступ к настройкам по адресу http://192.168.4.1
   HTTP_init();                                 //настраиваем HTTP интерфейс
   SSDP_init();
+
+  tempTicker.attach(2, test);
+  // tempTicker.attach_ms(15000, collectTemperature);
+  // tempLimitTicker.attach_ms(10000, getTempLimit);
 }
 
 void loop()
 {
   HTTP.handleClient();
-  delay(5000);    
-  Serial.println("Ok"); 
-  delay(1000);
-
-         
-  //AREST_init();                                //включаем aREST и сервер к нему
-  sensors.begin();                             // определение устройств на шине
-  sensors.getAddress(Thermometer,1);
-  sensors.requestTemperatures();
-  data1 = sensors.getTempC(Thermometer);// Получить значение температуры
-  data = (String)data1;
-  params = "datchId=" + (String)sensorId + "&data=" + data;
-  Serial.print("params = ");
-  Serial.println(params);
-  transmit2();
-  //HTTP.handleClient();
-  //delay(1);
-  //WiFiClient client = SERVERaREST.available();
-  //rest.handle(client);
-  EEPROM.get(50, operatingMaximumEeprom);
-  Serial.print("operatingMaximumEeprom_67 = ");
-  Serial.println(operatingMaximumEeprom);
-  EEPROM.get(0, operatingMinimumEeprom);
-  Serial.print("operatingMinimumEeprom_70 = ");
-  Serial.println(operatingMinimumEeprom);
-  
-  if(data1 < operatingMinimumEeprom)
-  {
-    Serial.print("data1_75 = ");
-    Serial.println(data1);
-    digitalWrite(D6, LOW);
-  }
-  if(data1 > operatingMaximumEeprom)
-  {
-    Serial.print("data1_81 = ");
-    Serial.println(data1);    
-    digitalWrite(D6, HIGH);
-  }
-    Serial.print("data1_85 = ");
-    Serial.println(data1);  
-  transmit1();
   delay(1);
-  //WiFiClient client = SERVERaREST.available();
-  //rest.handle(client);
+}
+
+void test() {
+  WiFiClient httpClient;                                      //Обьявляем обьект класса WiFiClient
+  Serial.println("Test1");
+  Serial.println("Test2");
 }
 
 void HTTP_init(void)
@@ -102,7 +74,7 @@ void HTTP_init(void)
     SSDP.schema(HTTP.client());
   });
   HTTP.on("/temp/get-current", HTTP_GET, []() {
-    HTTP.send(200, "text/plain", data);
+    HTTP.send(200, "text/plain", temperature);
   });
   HTTP.on("/temp/get-limit", HTTP_GET, []() {
     HTTP.send(200, "text/plain", String(operatingMinimumEeprom) + "|" + String(operatingMaximumEeprom));
@@ -126,15 +98,12 @@ void SSDP_init(void)
   SSDP.setManufacturerURL("http://www.esp8266-arduinoide.ru");
 }
 
-//void AREST_init(void)
-//{
-//  rest.set_id("1");                    // Определяем имя name и ИД ID устройства aREST
-//  rest.set_name("aRest");
-//  SERVERaREST.begin();                 // Запускаем сервер
-//}
-
-void transmit1()
+void sendCurrentTemp()
 {
+  params = "datchId=" + (String)sensorId + "&temperature=" + temperature;
+  Serial.print("params = ");
+  Serial.println(params);
+
   WiFiClient httpClient;                                      //Обьявляем обьект класса WiFiClient
   httpClient.setTimeout(1000);                                //Присваиваем значение паузы (1 секундa)
   Serial.print("HTTPS Connecting");                           //Пишем в UART: Соединяемся с нашим веб сервером
@@ -150,70 +119,65 @@ void transmit1()
   delay(1000);                                                 //Ждем
   httpClient.connect(host, httpPort);
   String Link;
-  Link = "/pokazaniya/data?" + params;                         //Формируем строку для GET запроса
+  Link = "/pokazaniya/temperature?" + params;                         //Формируем строку для GET запроса
   httpClient.print(String("GET ") + Link + " HTTP/1.1\r\n" + "Host: " + host + "\r\n\r\n"); //Отправляем GET запрос через ESP
 }
 
-void transmit2()
+void getTempLimit()
 {
   WiFiClient httpClient;                                      //Обьявляем обьект класса WiFiClient
   httpClient.setTimeout(1000);                                //Присваиваем значение паузы (1 секундa)
   Serial.print("HTTP Connecting");                           //Пишем в UART: Соединяемся с нашим веб сервером
   int r = 0;                                                  //Обьявляем переменную счетчика попыток подключения
-  while ((!httpClient.connect(host, httpPort)) && (r < 30))
-  {
+  while ((!httpClient.connect(host, httpPort)) && (r < 30)) {
     delay(100);
     Serial.print(".");
     r++;
   }                                                            //Пока пытаемся соединиться с веб сервером отправляем в UART точки
-  if (r == 30) 
-  {
+  if (r == 30) {
     Serial.println(" Connection failed");           //Если не получилось соединиться пишем в UART, что не получилось
-  }
-  else 
-  {
+  } else {
     Serial.println(" Connected to web");                    //Если получилось соединиться пишем в UART, что получилось
     delay(1000);                                                 //Ждем
     String Link2 = "/setting/setting?datchId=" + String(sensorId);                    //Формируем строку для GET запроса
     httpClient.print(String("GET ") + Link2 + " HTTP/1.1\r\n" + "Host: " + host + "\r\n\r\n"); //Отправляем GET запрос через ESP
-    while (httpClient.connected())                              //Ловим ответ веб сервера
-    {
+    while (httpClient.connected()) {                             //Ловим ответ веб сервера
       String line2 = httpClient.readStringUntil('\n');
       if (line2 == "\r") break;
     }
-    while(httpClient.available())                              //Ловим строку от веб сервера
-    {                
+    while(httpClient.available()) {                             //Ловим строку от веб сервера
       //Формируем строку для ответа веб сервера                 
       String line = httpClient.readStringUntil('\n');
-      //string.substring(from, to)
-      String line1 = line.substring(0, 30) ; 
-      Serial.println(line1);
+      String line1 = line.substring(0, 30); 
+
       int index1 = line1.indexOf(":");
       int index2 = line1.indexOf(",");
       int index3 = line1.indexOf(":", index2);
       int index4 = line1.indexOf("}");
-      String stroka1 = line1.substring(index1+1, index2);
-      float maximum = stroka1.toFloat();
+
+      String maxTempStr = line1.substring(index1+1, index2);
+      float maximum = maxTempStr.toFloat();
       operatingMaximum = maximum - 2;
       Serial.print("operatingMaximum = ");
       Serial.println(operatingMaximum); 
-      String stroka2 = line1.substring(index3+1, index4);
-      float minimum =  stroka2.toFloat();  
+
+      String minTempStr = line1.substring(index3+1, index4);
+      float minimum =  minTempStr.toFloat();  
       operatingMinimum = minimum +2;
       Serial.print("operatingMinimum = ");
       Serial.println(operatingMinimum);
+
       EEPROM.get(50, operatingMaximumEeprom);
-      if(operatingMaximumEeprom != operatingMaximum)
-      {
+      if (operatingMaximumEeprom != operatingMaximum) {
         operatingMaximumEeprom = operatingMaximum;
         EEPROM.put(50, operatingMaximumEeprom);
         EEPROM.commit();     // для esp8266/esp32
         Serial.print("operatingMaximumEeprom = ");
         Serial.println(operatingMaximumEeprom);
       }
+
       EEPROM.get(0, operatingMinimumEeprom);
-      if(operatingMinimumEeprom != operatingMinimum)
-      {
+      if (operatingMinimumEeprom != operatingMinimum) {
         operatingMinimumEeprom = operatingMinimum;
         EEPROM.put(0, operatingMinimumEeprom);
         EEPROM.commit();     // для esp8266/esp32
@@ -225,10 +189,29 @@ void transmit2()
   
 }
 
-void handleUpdateTempLimit() {
-  Serial.println("updateTempLimit");
-  Serial.println(HTTP.hasArg("minTemp"));
+void collectTemperature() {
+  Serial.println("Collecting temp...");
+  sensors.begin();                             // определение устройств на шине
+  sensors.getAddress(Thermometer,1);
+  sensors.requestTemperatures();
+  float currentTemp = sensors.getTempC(Thermometer);// Получить значение температуры
+  temperature = (String) currentTemp;
 
+  if (currentTemp < operatingMinimumEeprom) {
+    Serial.print("Temperature is critical low! ");
+    Serial.println(currentTemp);
+    digitalWrite(D6, LOW);
+  }
+  if (currentTemp > operatingMaximumEeprom) {
+    Serial.print("Temperature is critical high! ");
+    Serial.println(currentTemp);    
+    digitalWrite(D6, HIGH);
+  }
+
+  sendCurrentTemp();
+}
+
+void handleUpdateTempLimit() {
   if (HTTP.hasArg("minTemp")) {
     String minTemp = HTTP.arg("minTemp");
     float minimum = minTemp.toFloat();
